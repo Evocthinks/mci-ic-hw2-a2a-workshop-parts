@@ -5,9 +5,10 @@ import httpx
 import openai
 import pytest
 from fastapi.testclient import TestClient
+from openai.types.chat import ChatCompletion
 
 from workshop_a2a import llm, registry
-from workshop_a2a.llm import WINDOW, OpenAIChat, RequestWindow
+from workshop_a2a.llm import WINDOW, OpenAIChat, RequestWindow, run_tool_agent
 
 # shortened 429 answer of the Gemini free tier
 GEMINI_PER_MINUTE = (
@@ -24,17 +25,26 @@ def rate_limit(text, headers=None):
 
 
 class FakeCompletions:
-    """Raises the scripted errors in order and answers "ok" otherwise."""
+    """Raises or returns the scripted outcomes in order and answers "ok" afterwards."""
 
-    def __init__(self, errors=()):
-        self.errors, self.calls = list(errors), 0
+    def __init__(self, outcomes=()):
+        self.outcomes, self.requests = list(outcomes), []
+
+    @property
+    def calls(self):
+        return len(self.requests)
 
     def create(self, **kwargs):
-        self.calls += 1
-        if self.errors:
-            raise self.errors.pop(0)
-        message = SimpleNamespace(content="ok", tool_calls=None)
-        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        self.requests.append(kwargs)
+        outcome = self.outcomes.pop(0) if self.outcomes else completion({"role": "assistant", "content": "ok"})
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def completion(message):
+    return ChatCompletion.model_validate({"id": "r1", "object": "chat.completion", "created": 0, "model": "gemini-test",
+                                          "choices": [{"index": 0, "finish_reason": "stop", "message": message}]})
 
 
 @pytest.fixture
@@ -50,10 +60,10 @@ def make_chat(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "test")
     monkeypatch.setenv("LLM_MODEL", "gemini-test")
 
-    def make(errors=(), rpm=0):
+    def make(outcomes=(), rpm=0):
         monkeypatch.setenv("LLM_RPM", str(rpm))
         chat = OpenAIChat()
-        chat.client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions(errors)))
+        chat.client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions(outcomes)))
         return chat
 
     return make
@@ -126,3 +136,15 @@ def test_gives_up_after_max_attempts(make_chat, sleeps):
     with pytest.raises(openai.RateLimitError):
         ask(chat)
     assert chat.client.chat.completions.calls == llm.MAX_ATTEMPTS and len(sleeps) == llm.MAX_ATTEMPTS - 1
+
+
+def test_tool_call_goes_back_with_gemini_thought_signature(make_chat):
+    signature = {"google": {"thought_signature": "c2lnbmF0dXJl"}}
+    tool_call = completion({"role": "assistant", "content": None, "tool_calls": [{
+        "id": "call-1", "type": "function", "extra_content": signature,
+        "function": {"name": "lookup_fault", "arguments": '{"machine": "pump", "symptom": "noise"}'}}]})
+    chat = make_chat([tool_call])
+    tools = {"lookup_fault": llm.tool(lambda machine, symptom: {"cause": "bearing"}, "Look up a fault.", {})}
+    assert run_tool_agent(chat, "Diagnose.", tools, "Pump is noisy.") == "ok"
+    sent_back = chat.client.chat.completions.requests[1]["messages"][2]["tool_calls"][0]
+    assert sent_back["extra_content"] == signature and sent_back["function"]["name"] == "lookup_fault"

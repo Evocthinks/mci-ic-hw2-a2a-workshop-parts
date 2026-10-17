@@ -103,8 +103,9 @@ class OpenAIChat:
                     raise
                 print(f"[llm] {self.model}: {type(exc).__name__}, retry in {delay:.0f} s", flush=True)
                 time.sleep(delay)
+        # provider fields of a call go back unchanged, Gemini 3 rejects calls without its thought_signature
         calls = [{"id": c.id, "name": c.function.name,
-                  "arguments": json.loads(c.function.arguments or "{}")}
+                  "arguments": json.loads(c.function.arguments or "{}"), "extra": c.model_extra or {}}
                  for c in (message.tool_calls or [])]
         return {"content": message.content, "tool_calls": calls}
 
@@ -124,7 +125,7 @@ def run_tool_agent(llm, system_prompt, tools, user_text, max_steps=6):
             return reply["content"] or ""
         messages.append({"role": "assistant", "content": reply["content"], "tool_calls": [
             {"id": c["id"], "type": "function",
-             "function": {"name": c["name"], "arguments": json.dumps(c["arguments"])}}
+             "function": {"name": c["name"], "arguments": json.dumps(c["arguments"])}, **c.get("extra", {})}
             for c in reply["tool_calls"]]})
         for call in reply["tool_calls"]:
             try:
