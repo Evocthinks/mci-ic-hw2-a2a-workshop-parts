@@ -14,20 +14,20 @@ Every agent publishes its card at `/.well-known/agent-card.json` and can use its
 
 ## Setup
 
+Clone the repository, then in its folder:
+
 ```bash
-git clone [[PERSONALISIEREN: repository URL]]
-cd [[PERSONALISIEREN: repository folder]]
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Create a file `.env` in this folder for any OpenAI-compatible endpoint (LiteLLM proxy, Gemini free tier, Azure):
+Create a file `.env` in this folder for any OpenAI-compatible endpoint (LiteLLM proxy, Gemini free tier, Azure). For the Gemini free tier, get a key in [Google AI Studio](https://aistudio.google.com/):
 
 ```
 LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 LLM_API_KEY=your-key
-LLM_MODEL=gemini-2.5-flash
+LLM_MODEL=gemini-3.6-flash
 LLM_RPM=5
 ```
 
@@ -52,8 +52,12 @@ Free tiers allow only a few LLM requests per minute and model. The Gemini free t
 
 - **Shared limit.** With `LLM_RPM=5`, all agents together send at most 5 requests in any 61 seconds. The agents run as separate processes on one quota, so before every LLM call each agent reserves a slot at the registry (`POST /llm-slots`) and waits if needed. Agents with their own model (`PARTS_MODEL`, ...) get their own slots, because Google counts per model. If the registry cannot be reached, the limit only holds per process.
 - **Retry after 429.** If the provider still answers 429, the agent waits as long as the provider asks (`Please retry in 9s` from Gemini or a `Retry-After` header) and tries up to four times. Overloaded models (5xx) and network errors also get short retries. A used-up daily quota (`PerDay` in the Gemini error) fails at once, because waiting would not help.
-- **Duration.** A request takes one to two minutes. The agent output shows lines like `[llm] gemini-3.6-flash: waiting 55 s for a free request slot (LLM_RPM=5)`. The coordinator waits up to 5 minutes for each agent, `ask.py` up to 10 minutes for the answer.
+- **Duration.** A request takes one to two minutes. `ask.py` prints the registry list and the final answer; the terminal of `run_all.py` shows the agent calls and lines like `[llm] gemini-3.6-flash: waiting 55 s for a free request slot (LLM_RPM=5)`. The coordinator waits up to 5 minutes for each agent, `ask.py` up to 10 minutes for the answer.
 - **Daily quota.** The free tier also limits the requests per day and model. Every run of `ask.py` uses about ten of them.
+
+## Gemini 3 tool calls
+
+Gemini 3 attaches a `thought_signature` to every tool call and rejects the next request with `400 INVALID_ARGUMENT` if the signature is missing. The tool loop in `workshop_a2a/llm.py` therefore sends every provider field of a tool call back unchanged. Other OpenAI-compatible endpoints are not affected.
 
 ## Run with Docker
 
@@ -68,4 +72,4 @@ docker compose exec coordinator python ask.py
 python -m pytest -q
 ```
 
-The tests need no API key. They start all five services as real HTTP servers with scripted LLMs and check the full chain registry, coordinator, diagnosis, parts, scheduling. `tests/test_llm.py` checks the shared request limit and the retries after a 429 without waiting.
+The tests need no API key. They start all five services as real HTTP servers with scripted LLMs and check the full chain registry, coordinator, diagnosis, parts, scheduling. `tests/test_llm.py` checks the shared request limit, the retries after a 429 (without waiting) and that Gemini's thought signatures go back with the tool calls.
