@@ -1,0 +1,30 @@
+x-agent: &agent
+  build: .
+  env_file: .env
+  depends_on: [registry]
+
+services:
+  registry:
+    build: .
+    command: python -m workshop_a2a.registry
+    ports: ["8100:8100"]
+  diagnosis:
+    <<: *agent
+    command: python -m workshop_a2a.diagnosis
+    environment: {REGISTRY_URL: "http://registry:8100", PUBLIC_URL: "http://diagnosis:8101/"}
+    ports: ["8101:8101"]
+  parts:
+    <<: *agent
+    command: python -m workshop_a2a.parts
+    environment: {REGISTRY_URL: "http://registry:8100", PUBLIC_URL: "http://parts:8102/"}
+    ports: ["8102:8102"]
+  scheduling:
+    <<: *agent
+    command: python -m workshop_a2a.scheduling
+    environment: {REGISTRY_URL: "http://registry:8100", PUBLIC_URL: "http://scheduling:8103/"}
+    ports: ["8103:8103"]
+  coordinator:
+    <<: *agent
+    command: python -m workshop_a2a.coordinator
+    environment: {REGISTRY_URL: "http://registry:8100", PUBLIC_URL: "http://coordinator:8110/"}
+    ports: ["8110:8110"]
